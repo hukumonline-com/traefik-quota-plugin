@@ -1,0 +1,62 @@
+version: '3.1'
+
+services:
+  # Traefik reverse proxy with the quota plugin
+  traefik:
+    image: traefik:v3.5.3
+    container_name: traefik-quota
+    command:
+      - --configFile=/etc/traefik/traefik.yaml
+    ports:
+      - "8000:8000"     # HTTP entry point
+      - "8080:8080"     # Traefik dashboard
+    volumes:
+      - ./traefik/traefik.yaml:/etc/traefik/traefik.yaml:ro
+      - ./traefik/dynamic.yaml:/etc/traefik/dynamic.yaml:ro
+      - .:/plugins-local/src/github.com/hukumonline-com/traefik-quota-plugin:ro
+    networks:
+      - traefik-network
+    depends_on:
+      - redis
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.dashboard.rule=Host(`traefik.localhost`)"
+      - "traefik.http.routers.dashboard.service=api@internal"
+
+  # Redis for quota and rate limit persistence
+  redis:
+    image: redis:7-alpine
+    container_name: redis-quota
+    ports:
+      - "6379:6379"
+    networks:
+      - traefik-network
+    command: redis-server --appendonly yes
+    volumes:
+      - redis-data:/data
+
+  # Chat service - for testing quota and rate limiting
+  chat-service:
+    image: node:18-alpine
+    container_name: chat-service
+    working_dir: /app
+    volumes:
+      - ./docker/package.json:/app/package.json
+      - ./docker/test-backend.js:/app/test-backend.js
+    command: >
+      sh -c "npm install && node test-backend.js"
+    networks:
+      - traefik-network
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.chat.rule=Host(`chat.localhost`)"
+      - "traefik.http.routers.chat.service=chat-service"
+      - "traefik.http.services.chat-service.loadbalancer.server.port=3000"
+      - "traefik.http.routers.chat.middlewares=chat-quota"
+
+networks:
+  traefik-network:
+    driver: bridge
+
+volumes:
+  redis-data:

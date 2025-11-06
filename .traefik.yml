@@ -1,0 +1,28 @@
+# Traefik plugin configuration
+displayName: Traefik Quota Plugin
+type: middleware
+iconPath: .assets/icon.png
+
+import: github.com/hukumonline-com/traefik-quota-plugin
+
+summary: 'A powerful Traefik middleware plugin for rate limiting and quota management with Redis persistence, supporting header-based identification and configurable periods'
+
+testData:
+  Quota:
+    Persistence:
+      Redis:
+        Address: "redis:6379"
+        Password: ""
+        DB: 0
+    Identifier:
+      Type: "Header"
+      Name: "X-User-ID"
+      Value: "default-user"
+    RateLimit:
+      Rate: 5
+      Burst: 10
+      Period: "1m"
+    Quota:
+      Enabled: true
+      Limit: 100
+      Period: "Monthly"

@@ -1,0 +1,75 @@
+http:
+  routers:
+    # Chat service router with quota and rate limiting
+    chat:
+      rule: "Host(`chat.localhost`)"
+      entryPoints:
+        - web
+      middlewares:
+        - chat-quota
+      service: chat-service
+
+  middlewares:
+    # Chat service with multiple identifiers based on CONFIG.yaml
+    chat-quota:
+      plugin:
+        quota:
+          Persistence: 
+            Redis:
+              Address: "redis:6379"
+              Password: ""
+              DB: 0
+          Identifiers:
+            # Specific user identifier - only matches when header value is exactly "sk-didingateng"
+            - Type: "Header"
+              Name: "X-User-ID"
+              Value: "sk-didingateng"
+              RateLimit:
+                Enabled: true
+                Rate: 5
+                Burst: 10
+                Period: "1m"
+                ResponseReachedLimitCode: 429
+                ResponseReachedLimitBody: |
+                  {
+                    "error": "Rate limit exceeded. Please try again later."
+                  }
+              Quota:
+                Enabled: true
+                Limit: 100
+                Period: "Monthly"
+                ResponseReachedLimitCode: 429
+                ResponseReachedLimitBody: |
+                  {
+                    "error": "Quota exceeded. Please contact support."
+                  }
+            
+            # Fallback identifier for requests without valid headers
+            - Type: "Header"
+              Name: "X-User-ID"
+              Value: "sk-unknown"
+              RateLimit:
+                Enabled: true
+                Rate: 1
+                Burst: 2
+                Period: "1m"
+                ResponseReachedLimitCode: 429
+                ResponseReachedLimitBody: |
+                  {
+                    "error": "Anonymous rate limit exceeded. Please provide valid credentials for higher limits."
+                  }
+              Quota:
+                Enabled: true
+                Limit: 10
+                Period: "Daily"
+                ResponseReachedLimitCode: 403
+                ResponseReachedLimitBody: |
+                  {
+                    "error": "Anonymous daily quota exceeded. Please register for higher limits."
+                  }
+
+  services:
+    chat-service:
+      loadBalancer:
+        servers:
+          - url: "http://chat-service:3000"
