@@ -28,6 +28,16 @@ type quotaPlugin struct {
 	managers    map[string]*IdentifierManager
 }
 
+// passthroughPlugin is used when quota plugin is disabled (no Redis config)
+type passthroughPlugin struct {
+	next http.Handler
+}
+
+// ServeHTTP for passthrough plugin - just forwards all requests without any rate limiting
+func (p *passthroughPlugin) ServeHTTP(rw http.ResponseWriter, req *http.Request) {
+	p.next.ServeHTTP(rw, req)
+}
+
 // IdentifierManager manages rate limiting and quota for a specific identifier
 type IdentifierManager struct {
 	config       *IdentifierConfig
@@ -49,19 +59,22 @@ type QuotaResponse struct {
 
 // New creates and returns a new quota plugin instance
 func New(ctx context.Context, next http.Handler, config *Config, name string) (http.Handler, error) {
-	// Validate configuration
+	// If Redis address is empty, disable the plugin (pass-through mode)
 	if config.Persistence.Redis.Address == "" {
-		return nil, fmt.Errorf("redis address is required")
+		log.Printf("Quota plugin '%s' disabled: Redis address not configured", name)
+		return &passthroughPlugin{next: next}, nil
 	}
 
 	if len(config.Identifiers) == 0 {
-		return nil, fmt.Errorf("at least one identifier is required")
+		log.Printf("Quota plugin '%s' disabled: No identifiers configured", name)
+		return &passthroughPlugin{next: next}, nil
 	}
 
 	// Initialize Redis client
 	redisClient, err := NewRedisClient(config.Persistence.Redis)
 	if err != nil {
-		return nil, fmt.Errorf("failed to create Redis client: %w", err)
+		log.Printf("Quota plugin '%s' disabled: Failed to connect to Redis - %v", name, err)
+		return &passthroughPlugin{next: next}, nil
 	}
 
 	// Initialize managers for each identifier
