@@ -360,9 +360,7 @@ func (q *quotaPlugin) buildTemplateData(req *http.Request) *TemplateData {
 		ips := strings.Split(forwarded, ",")
 		ip = strings.TrimSpace(ips[0])
 	}
-	if realIP := req.Header.Get("X-Real-IP"); realIP != "" {
-		ip = realIP
-	}
+
 	// Remove port if present
 	if idx := strings.LastIndex(ip, ":"); idx != -1 {
 		ip = ip[:idx]
