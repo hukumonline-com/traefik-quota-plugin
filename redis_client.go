@@ -42,6 +42,8 @@ func NewRedisClient(config RedisConfig) (RedisClient, error) {
 		timeout:  5 * time.Second,
 	}
 
+	fmt.Printf("Redis: Creating client with address=%s, db=%d\n", config.Address, config.DB)
+
 	// Test connection
 	if err := client.connect(); err != nil {
 		return nil, fmt.Errorf("failed to connect to Redis: %w", err)
@@ -54,6 +56,7 @@ func NewRedisClient(config RedisConfig) (RedisClient, error) {
 		return nil, fmt.Errorf("failed to ping Redis: %w", err)
 	}
 
+	fmt.Printf("Redis: Successfully connected to database %d\n", config.DB)
 	return client, nil
 }
 
@@ -108,6 +111,7 @@ func (c *SimpleRedisClient) Set(ctx context.Context, key string, value interface
 		return err
 	}
 
+	// Redis SET command can return either "+OK" or just "OK"
 	if !strings.HasPrefix(resp, "OK") {
 		return fmt.Errorf("set failed: %s", resp)
 	}
@@ -244,12 +248,10 @@ func (c *SimpleRedisClient) connect() error {
 		}
 	}
 
-	// Select database
-	if c.db != 0 {
-		if err := c.selectDB(); err != nil {
-			c.conn.Close()
-			return err
-		}
+	// Always select database (even if it's 0 to ensure we're on the right DB)
+	if err := c.selectDB(); err != nil {
+		c.conn.Close()
+		return err
 	}
 
 	return nil
@@ -268,7 +270,8 @@ func (c *SimpleRedisClient) auth() error {
 		return err
 	}
 
-	if !strings.HasPrefix(resp, "+OK") {
+	// Redis AUTH command can return either "+OK" or just "OK"
+	if !strings.HasPrefix(resp, "+OK") && resp != "OK" {
 		return fmt.Errorf("authentication failed: %s", resp)
 	}
 
@@ -289,10 +292,14 @@ func (c *SimpleRedisClient) selectDB() error {
 		return err
 	}
 
-	if !strings.HasPrefix(resp, "+OK") {
+	fmt.Printf("Redis: SELECT DB %d response: '%s'\n", c.db, resp)
+
+	// Redis SELECT command can return either "+OK" or just "OK"
+	if !strings.HasPrefix(resp, "+OK") && resp != "OK" {
 		return fmt.Errorf("select database failed: %s", resp)
 	}
 
+	fmt.Printf("Redis: Successfully selected database %d\n", c.db)
 	return nil
 }
 

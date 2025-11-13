@@ -1,6 +1,7 @@
 package traefik_quota_plugin
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"log"
@@ -8,6 +9,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"text/template"
 )
 
 func init() {
@@ -55,6 +57,16 @@ type QuotaResponse struct {
 	Reason         string         `json:"reason,omitempty"`
 	ResponseCode   int            `json:"response_code,omitempty"`
 	ResponseBody   string         `json:"response_body,omitempty"`
+}
+
+// TemplateData holds data available for template evaluation
+type TemplateData struct {
+	Headers map[string]string `json:"headers"`
+	Query   map[string]string `json:"query"`
+	Cookies map[string]string `json:"cookies"`
+	IP      string            `json:"ip"`
+	Method  string            `json:"method"`
+	Path    string            `json:"path"`
 }
 
 // New creates and returns a new quota plugin instance
@@ -317,6 +329,73 @@ func (q *quotaPlugin) checkIdentifier(req *http.Request, manager *IdentifierMana
 	return response, nil
 }
 
+// buildTemplateData creates template data from HTTP request
+func (q *quotaPlugin) buildTemplateData(req *http.Request) *TemplateData {
+	// Build headers map
+	headers := make(map[string]string)
+	for key, values := range req.Header {
+		if len(values) > 0 {
+			headers[key] = values[0] // Take first value
+		}
+	}
+
+	// Build query parameters map
+	query := make(map[string]string)
+	for key, values := range req.URL.Query() {
+		if len(values) > 0 {
+			query[key] = values[0] // Take first value
+		}
+	}
+
+	// Build cookies map
+	cookies := make(map[string]string)
+	for _, cookie := range req.Cookies() {
+		cookies[cookie.Name] = cookie.Value
+	}
+
+	// Extract IP address
+	ip := req.RemoteAddr
+	if forwarded := req.Header.Get("X-Forwarded-For"); forwarded != "" {
+		// Take first IP in case of multiple
+		ips := strings.Split(forwarded, ",")
+		ip = strings.TrimSpace(ips[0])
+	}
+	if realIP := req.Header.Get("X-Real-IP"); realIP != "" {
+		ip = realIP
+	}
+	// Remove port if present
+	if idx := strings.LastIndex(ip, ":"); idx != -1 {
+		ip = ip[:idx]
+	}
+
+	return &TemplateData{
+		Headers: headers,
+		Query:   query,
+		Cookies: cookies,
+		IP:      ip,
+		Method:  req.Method,
+		Path:    req.URL.Path,
+	}
+}
+
+// executeTemplate executes a Go text template with the provided data
+func (q *quotaPlugin) executeTemplate(templateStr string, data *TemplateData) (string, error) {
+	// Create a new template with custom delimiters
+	tmpl, err := template.New("identifier").Delims("[[", "]]").Parse(templateStr)
+	if err != nil {
+		return "", fmt.Errorf("failed to parse template: %w", err)
+	}
+
+	// Execute template
+	var buf bytes.Buffer
+	err = tmpl.Execute(&buf, data)
+	if err != nil {
+		return "", fmt.Errorf("failed to execute template: %w", err)
+	}
+
+	return strings.TrimSpace(buf.String()), nil
+}
+
 // extractIdentifier extracts the identifier from the request based on configuration
 func (q *quotaPlugin) extractIdentifier(req *http.Request, config *IdentifierConfig) string {
 	switch config.Type {
@@ -335,12 +414,6 @@ func (q *quotaPlugin) extractIdentifier(req *http.Request, config *IdentifierCon
 			// If header exists but doesn't match, return empty (no match)
 			log.Printf("Header doesn't match config value, returning empty")
 			return ""
-		}
-
-		// If no header found, check if this is a fallback identifier
-		if config.Value == "sk-unknown" || config.Value == "anonymous" || config.Value == "guest" {
-			log.Printf("No header found, using fallback value: %s", config.Value)
-			return config.Value
 		}
 
 		// For specific identifiers, return empty when header is missing
@@ -374,6 +447,19 @@ func (q *quotaPlugin) extractIdentifier(req *http.Request, config *IdentifierCon
 			return cookie.Value
 		}
 		return config.Value
+	case "Template":
+		// Build template data from request
+		templateData := q.buildTemplateData(req)
+
+		// Execute template with the data
+		result, err := q.executeTemplate(config.Value, templateData)
+		if err != nil {
+			log.Printf("Template execution failed: %v", err)
+			return ""
+		}
+
+		log.Printf("Template result: '%s' from template: '%s'", result, config.Value)
+		return result
 	default:
 		return config.Value
 	}
